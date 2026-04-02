@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Runtime polyfill for bun:bundle (build-time macros)
-const feature = (_name: string) => false;
+const feature = (_name: string) => false;  //feature()用于设置内部分支，返回false禁用全部内部分支
 if (typeof globalThis.MACRO === "undefined") {
     (globalThis as any).MACRO = {
         VERSION: "2.1.888",
@@ -11,8 +11,9 @@ if (typeof globalThis.MACRO === "undefined") {
         PACKAGE_URL: "",
         VERSION_CHANGELOG: "",
     };
-}
+}//MACRO全局对象，模拟注入，让后续代码读 MACRO.VERSION 时能拿到值
 // Build-time constants — normally replaced by Bun bundler at compile time
+//三个全局变量，在代码各处被读取，用来区分运行环境
 (globalThis as any).BUILD_TARGET = "external";
 (globalThis as any).BUILD_ENV = "production";
 (globalThis as any).INTERFACE_TYPE = "stdio";
