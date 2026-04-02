@@ -1,6 +1,6 @@
 {
   "name": "claude-js",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Reverse-engineered Anthropic Claude Code CLI — interactive AI coding assistant in the terminal",
   "type": "module",
   "author": "claude-code-best <claude-code-best@proton.me>",
@@ -35,8 +35,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "bun build src/entrypoints/cli.tsx --outdir dist --target bun",
-    "dev": "bun run src/entrypoints/cli.tsx",
+    "build": "bun run build.ts",
+    "dev": "bun run scripts/dev.ts",
     "prepublishOnly": "bun run build",
     "lint": "biome lint src/",
     "lint:fix": "biome lint --fix src/",
