@@ -1,5 +1,56 @@
 # DEV-LOG
 
+## Enable Remote Control / BRIDGE_MODE (2026-04-03)
+
+**PR**: [claude-code-best/claude-code#60](https://github.com/claude-code-best/claude-code/pull/60)
+
+Remote Control 功能将本地 CLI 注册为 bridge 环境，生成可分享的 URL（`https://claude.ai/code/session_xxx`），允许从浏览器、手机或其他设备远程查看输出、发送消息、审批工具调用。
+
+**改动文件：**
+
+| 文件 | 变更 |
+|------|------|
+| `scripts/dev.ts` | `DEFAULT_FEATURES` 加入 `"BRIDGE_MODE"`，dev 模式默认启用 |
+| `src/bridge/peerSessions.ts` | stub → 完整实现：通过 bridge API 发送跨会话消息，含三层安全防护（trim + validateBridgeId 白名单 + encodeURIComponent） |
+| `src/bridge/webhookSanitizer.ts` | stub → 完整实现：正则 redact 8 类 secret（GitHub/Anthropic/AWS/npm/Slack token），先 redact 再截断，失败返回安全占位符 |
+| `src/entrypoints/sdk/controlTypes.ts` | 12 个 `any` stub → `z.infer<ReturnType<typeof XxxSchema>>` 从现有 Zod schema 推导类型 |
+| `src/hooks/useReplBridge.tsx` | `tengu_bridge_system_init` 默认值 `false` → `true`，使 app 端显示 "active" 而非卡在 "connecting" |
+
+**关键设计决策：**
+
+1. **不改现有代码逻辑** — 只补全 stub、修正默认值、开启编译开关
+2. **`tengu_bridge_system_init`** — Anthropic 通过 GrowthBook 给订阅用户推送 `true`，但我们的 build 收不到推送；改默认值是唯一不侵入其他代码的方案
+3. **`peerSessions.ts` 认证** — 使用 `getBridgeAccessToken()` 获取 OAuth Bearer token，与 `bridgeApi.ts`/`codeSessionApi.ts` 认证模式一致
+4. **`webhookSanitizer.ts` 安全** — fail-closed（出错返回 `[webhook content redacted due to sanitization error]`），不泄露原始内容
+
+**验证结果：**
+
+- `/remote-control` 命令可见且可用
+- CLI 连接 Anthropic CCR，生成可分享 URL
+- App 端（claude.ai/code）显示 "Remote Control active"
+- 手机端（Claude iOS app）通过 URL 连接，双向消息正常
+
+![Remote Control on Mobile](docs/images/remote-control-mobile.png)
+
+---
+
+## GrowthBook 自定义服务器适配器 (2026-04-03)
+
+GrowthBook 功能开关系统原为 Anthropic 内部构建设计，硬编码 SDK key 和 API 地址，外部构建因 `is1PEventLoggingEnabled()` 门控始终禁用。新增适配器模式，通过环境变量连接自定义 GrowthBook 服务器，无配置时所有 feature 读取返回代码默认值。
+
+**修改文件：**
+
+| 文件 | 变更 |
+|------|------|
+| `src/constants/keys.ts` | `getGrowthBookClientKey()` 优先读取 `CLAUDE_GB_ADAPTER_KEY` 环境变量 |
+| `src/services/analytics/growthbook.ts` | `isGrowthBookEnabled()` 适配器模式下直接返回 `true`，绕过 1P event logging 门控 |
+| `src/services/analytics/growthbook.ts` | `getGrowthBookClient()` base URL 优先使用 `CLAUDE_GB_ADAPTER_URL` |
+| `docs/internals/growthbook-adapter.mdx` | 新增适配器配置文档，含全部 ~58 个 feature key 列表 |
+
+**用法：** `CLAUDE_GB_ADAPTER_URL=https://gb.example.com/ CLAUDE_GB_ADAPTER_KEY=sdk-xxx bun run dev`
+
+---
+
 ## Datadog 日志端点可配置化 (2026-04-03)
 
 将 Datadog 硬编码的 Anthropic 内部端点改为环境变量驱动，默认禁用。
@@ -151,3 +202,37 @@
 注意：
 - `USER_TYPE=ant` 启用 alt-screen 全屏模式，中心区域满屏是预期行为
 - `global.d.ts` 中剩余未 stub 的全局函数（`getAntModels` 等）遇到 `X is not defined` 时按同样模式处理
+
+---
+
+## /login 添加 Custom Platform 选项 (2026-04-03)
+
+在 `/login` 命令的登录方式选择列表中新增 "Custom Platform" 选项（位于第一位），允许用户直接在终端配置第三方 API 兼容服务的 Base URL、API Key 和三种模型映射，保存到 `~/.claude/settings.json`。
+
+**修改文件：**
+
+| 文件 | 变更 |
+|------|------|
+| `src/components/ConsoleOAuthFlow.tsx` | `OAuthStatus` 类型新增 `custom_platform` state（含 `baseUrl`、`apiKey`、`haikuModel`、`sonnetModel`、`opusModel`、`activeField`）；`idle` case Select 选项新增 Custom Platform 并排第一位；新增 `custom_platform` case 渲染 5 字段表单（Tab/Shift+Tab 切换、focus 高亮、Enter 跳转/保存）；Select onChange 处理 `custom_platform` 初始状态（从 `process.env` 预填当前值）；`OAuthStatusMessageProps` 类型及调用处新增 `onDone` prop |
+| `src/components/ConsoleOAuthFlow.tsx` | 新增 `updateSettingsForSource` import |
+
+**UI 交互：**
+- 5 个字段同屏：Base URL、API Key、Haiku Model、Sonnet Model、Opus Model
+- 当前活动字段的标签用 `suggestion` 背景色 + `inverseText` 反色高亮
+- Tab / Shift+Tab 在字段间切换，各自保留输入值
+- 每个字段按 Enter 跳到下一个，最后一个字段 (Opus) 按 Enter 保存
+- 模型字段自动从 `process.env` 读取当前配置作为预填值，无值则空
+- 保存时调用 `updateSettingsForSource('userSettings', { env })` 写入 settings.json，同时更新 `process.env`
+
+**保存的 settings.json env 字段：**
+```json
+{
+  "ANTHROPIC_BASE_URL": "...",
+  "ANTHROPIC_AUTH_TOKEN": "...",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL": "...",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL": "...",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL": "..."
+}
+```
+
+非空字段才写入，保存后立即生效（`onDone()` 触发 `onChangeAPIKey()` 刷新 API 客户端）。
